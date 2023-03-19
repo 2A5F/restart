@@ -1,0 +1,17 @@
+[package]
+edition = "2021"
+name = "restarter"
+version = "0.1.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+chrono = {version = "0.4", features = ["serde"]}
+env_logger = " 0.10"
+log = "0.4"
+serde = {version = "1", features = ["derive"]}
+serde_json = "1"
+shared_child = "1"
+timer = "0.2"
+tokio = {version = "1", features = ["full"]}
+tuples = "1.8"

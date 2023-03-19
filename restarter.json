@@ -1,0 +1,16 @@
+{
+  "path": "1",
+  "stop_command": "1",
+  "timeout": {
+    "secs": 1,
+    "nanos": 0
+  },
+  "mode": {
+    "daily": {
+      "time": {
+        "secs": 18000,
+        "nanos": 0
+      }
+    }
+  }
+}

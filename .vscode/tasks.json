@@ -1,0 +1,23 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "cargo",
+      "command": "build",
+      "problemMatcher": ["$rustc"],
+      "group": "build",
+      "label": "rust: cargo build"
+    },
+    {
+      "label": "run",
+      "type": "process",
+      "command": "${workspaceFolder}/target/debug/restarter.exe",
+      "problemMatcher": [],
+      "dependsOn": "rust: cargo build",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "isBackground": true
+    }
+  ]
+}
