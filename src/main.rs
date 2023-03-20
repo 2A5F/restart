@@ -1,3 +1,4 @@
+use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use shared_child::SharedChild;
 use std::{
@@ -33,12 +34,34 @@ async fn main() -> tokio::io::Result<()> {
     let tx = Arc::new(tx);
     let tx2 = tx.clone();
 
+    let timer = Box::leak(Box::new(Timer::new()));
+
     match config.mode {
         Mode::Daily { time } => {
-            let timer = Timer::new();
-            timer.schedule_with_delay(chrono::Duration::from_std(time).unwrap(), move || {
-                tx.send(Oper::Stop).unwrap();
-            });
+            let now = chrono::Local::now()
+                .with_hour(0)
+                .unwrap()
+                .with_minute(0)
+                .unwrap()
+                .with_second(0)
+                .unwrap()
+                .with_nanosecond(0)
+                .unwrap();
+            timer
+                .schedule(
+                    now,
+                    Some(chrono::Duration::from_std(time).unwrap()),
+                    move || {
+                        log::info!("定时器触发");
+                        match tx.send(Oper::Stop) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                log::error!("发送定时器信号失败，错误：{}", e);
+                            }
+                        }
+                    },
+                )
+                .ignore();
         }
     }
 
