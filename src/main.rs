@@ -19,9 +19,52 @@ use tuples::{TupleCloned, TupleTransposeResultSameError};
 
 const CONFIG_FILE_NAME: &str = "restarter.json";
 
+fn init_log() {
+    use log::LevelFilter;
+    use log4rs::{
+        append::{
+            console::{ConsoleAppender, Target},
+            file::FileAppender,
+        },
+        config::{Appender, Root},
+        encode::pattern::PatternEncoder,
+        filter::threshold::ThresholdFilter,
+        init_config, Config,
+    };
+    let level = LevelFilter::Info;
+    let encoder = Box::new(PatternEncoder::new("[{d(%Y-%m-%d %H:%M:%S%.6f %Z)}][{h({l})}][{T}] {m}{n}"));
+    let stderr = ConsoleAppender::builder()
+        .encoder(encoder.clone())
+        .target(Target::Stderr)
+        .build();
+    let logfile = Box::new(
+        FileAppender::builder()
+            .encoder(encoder)
+            .build("./restarter.log")
+            .unwrap(),
+    );
+    init_config(
+        Config::builder()
+            .appender(Appender::builder().build("logfile", logfile))
+            .appender(
+                Appender::builder()
+                    .filter(Box::new(ThresholdFilter::new(level)))
+                    .build("stderr", Box::new(stderr)),
+            )
+            .build(
+                Root::builder()
+                    .appender("logfile")
+                    .appender("stderr")
+                    .build(LevelFilter::Trace),
+            )
+            .unwrap(),
+    )
+    .unwrap();
+}
+
 #[tokio::main]
 async fn main() -> tokio::io::Result<()> {
-    env_logger::init_from_env(env_logger::Env::new().default_filter_or("info"));
+    init_log();
 
     let cwd = env::current_dir()?;
     let config_path = cwd.join(CONFIG_FILE_NAME);
