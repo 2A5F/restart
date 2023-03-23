@@ -4,6 +4,7 @@ use shared_child::SharedChild;
 use std::{
     env,
     io::Write,
+    ops::Add,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Arc,
@@ -32,7 +33,9 @@ fn init_log() {
         init_config, Config,
     };
     let level = LevelFilter::Info;
-    let encoder = Box::new(PatternEncoder::new("[{d(%Y-%m-%d %H:%M:%S%.6f %Z)}][{h({l})}][{T}] {m}{n}"));
+    let encoder = Box::new(PatternEncoder::new(
+        "[{d(%Y-%m-%d %H:%M:%S%.6f %Z)}][{h({l})}][{T}] {m}{n}",
+    ));
     let stderr = ConsoleAppender::builder()
         .encoder(encoder.clone())
         .target(Target::Stderr)
@@ -89,11 +92,13 @@ async fn main() -> tokio::io::Result<()> {
                 .with_second(0)
                 .unwrap()
                 .with_nanosecond(0)
-                .unwrap();
+                .unwrap()
+                + chrono::Duration::days(1)
+                + chrono::Duration::from_std(time).unwrap();
             timer
                 .schedule(
                     now,
-                    Some(chrono::Duration::from_std(time).unwrap()),
+                    Some(chrono::Duration::days(1)),
                     move || {
                         log::info!("定时器触发");
                         match tx.send(Oper::Stop) {
