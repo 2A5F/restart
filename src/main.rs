@@ -4,7 +4,6 @@ use shared_child::SharedChild;
 use std::{
     env,
     io::Write,
-    ops::Add,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::Arc,
