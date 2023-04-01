@@ -5,7 +5,7 @@ use std::{
     env,
     io::Write,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{ChildStdin, Command, Stdio},
     sync::Arc,
     time::Duration,
 };
@@ -95,26 +95,48 @@ async fn main() -> tokio::io::Result<()> {
                 + chrono::Duration::days(1)
                 + chrono::Duration::from_std(time).unwrap();
             timer
-                .schedule(
-                    now,
-                    Some(chrono::Duration::days(1)),
-                    move || {
-                        log::info!("定时器触发");
-                        match tx.send(Oper::Stop) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                log::error!("发送定时器信号失败，错误：{}", e);
-                            }
+                .schedule(now, Some(chrono::Duration::days(1)), move || {
+                    log::info!("定时器触发");
+                    match tx.send(Oper::Stop) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            log::error!("发送定时器信号失败，错误：{}", e);
                         }
-                    },
-                )
+                    }
+                })
                 .ignore();
         }
     }
 
+    let (self_stdin_tx, _) = sync::broadcast::channel::<Arc<String>>(16);
+    let self_stdin_tx = Arc::new(self_stdin_tx);
+    let self_stdin_tx2 = self_stdin_tx.clone();
+
+    tokio::task::spawn(async move {
+        let self_stdin_tx = self_stdin_tx2;
+        let mut self_stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+        loop {
+            match self_stdin.next_line().await {
+                Ok(Some(line)) => {
+                    if let Err(e) = self_stdin_tx.send(Arc::new(line)) {
+                        log::error!("转发标准输入失败，错误：{}", e);
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    log::error!("读取标准输入出错，错误：{}", e);
+                }
+            }
+        }
+    });
+
     loop {
         let tx = &tx2;
-        let process = tokio::spawn(start_process(config.clone(), tx.subscribe()));
+        let process = tokio::spawn(start_process(
+            config.clone(),
+            tx.subscribe(),
+            self_stdin_tx.subscribe(),
+        ));
 
         join!(process)
             .transpose_same_error()?
@@ -265,6 +287,7 @@ enum Oper {
 async fn start_process(
     config: Config,
     mut opres: sync::broadcast::Receiver<Oper>,
+    mut self_stdin_rx: sync::broadcast::Receiver<Arc<String>>,
 ) -> tokio::io::Result<()> {
     let mut command = Command::new(&config.path);
     command
@@ -281,7 +304,9 @@ async fn start_process(
     let child_exit_tx = Arc::new(child_exit_tx);
     let child_exit_tx2 = child_exit_tx.clone();
     let child_exit_tx3 = child_exit_tx.clone();
-    let child_exit_tx4 = child_exit_tx.clone();
+
+    let (exit_cmd_tx, mut exit_cmd_rx) = sync::broadcast::channel::<Arc<String>>(16);
+    let exit_cmd_tx = Arc::new(exit_cmd_tx);
 
     let wait_child = child.clone();
     let wait_child = tokio::task::spawn_blocking(move || {
@@ -298,61 +323,45 @@ async fn start_process(
         });
     });
 
-    let (self_stdin_tx, mut self_stdin_rx) = sync::mpsc::channel::<String>(16);
-    let self_stdin_tx = Arc::new(self_stdin_tx);
-    let self_stdin_tx2 = self_stdin_tx.clone();
-
-    let wait_stdin = tokio::task::spawn(async move {
-        let self_stdin_tx = self_stdin_tx2;
-        let mut child_exit_rx = child_exit_tx3.subscribe();
-        let mut self_stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-        loop {
-            tokio::select! {
-                _ = child_exit_rx.recv() => {
-                    return;
-                }
-                line = self_stdin.next_line() => {
-                    match line {
-                        Ok(Some(line)) => {
-                            self_stdin_tx.send(line).await.expect("内部错误：转发标准输入失败");
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            log::error!("读取标准输入出错，错误：{}", e);
-                        }
-                    }
-                }
-            }
-        }
-    });
-
     let wait_send_stdin = tokio::task::spawn(async move {
         if let Some(mut stdin) = stdin {
-            let mut child_exit_rx = child_exit_tx4.subscribe();
+            let mut child_exit_rx = child_exit_tx3.subscribe();
             loop {
                 tokio::select! {
                     _ = child_exit_rx.recv() => {
                         return;
                     }
-                    line = self_stdin_rx.recv() => {
-                        match line {
-                            None => {}
-                            Some(line) => {
-                                match stdin.write_all(line.as_bytes()) {
-                                    Ok(_) => {},
-                                    Err(e) => {
-                                        log::error!("转发标准输入失败，错误：{}", e);
-                                    },
-                                };
-                                match stdin.write_all("\n".as_bytes()) {
-                                    Ok(_) => {},
-                                    Err(e) => {
-                                        log::error!("转发标准输入失败，错误：{}", e);
-                                    },
-                                };
-                            }
-                        }
+                    line = exit_cmd_rx.recv() => {
+                        send_to_stdin(&mut stdin, line);
                     }
+                    line = self_stdin_rx.recv() => {
+                        send_to_stdin(&mut stdin, line);
+                    }
+                }
+            }
+        }
+
+        fn send_to_stdin(
+            stdin: &mut ChildStdin,
+            line: Result<Arc<String>, sync::broadcast::error::RecvError>,
+        ) {
+            match line {
+                Ok(line) => {
+                    match stdin.write_all(line.as_bytes()) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            log::error!("转发标准输入失败，错误：{}", e);
+                        }
+                    };
+                    match stdin.write_all("\n".as_bytes()) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            log::error!("转发标准输入失败，错误：{}", e);
+                        }
+                    };
+                }
+                Err(e) => {
+                    log::error!("转发标准输入失败，错误：{}", e);
                 }
             }
         }
@@ -371,19 +380,18 @@ async fn start_process(
         child: &Arc<SharedChild>,
         oper: &Oper,
         has_stdin: bool,
-        stop_command: &Option<String>,
+        stop_command: &Option<Arc<String>>,
         timeout: &Option<Duration>,
         time_out_tx: &Arc<sync::mpsc::Sender<()>>,
         child_exit_tx: &Arc<sync::broadcast::Sender<()>>,
-        self_stdin_tx: &Arc<sync::mpsc::Sender<String>>,
+        exit_cmd_tx: &Arc<sync::broadcast::Sender<Arc<String>>>,
     ) -> bool {
         match oper {
             Oper::Stop => {
                 if let (true, Some(stop_command)) = (has_stdin, stop_command) {
                     if !stop_command.is_empty() {
-                        self_stdin_tx
+                        exit_cmd_tx
                             .send(stop_command.clone())
-                            .await
                             .expect("内部错误：发送退出命令失败");
                         if let Some(timeout) = timeout.cloned() {
                             let time_out_tx = time_out_tx.clone();
@@ -406,7 +414,7 @@ async fn start_process(
         }
     }
     let wait_oper = tokio::spawn(async move {
-        let stop_command = &config.stop_command;
+        let stop_command = config.stop_command.as_ref().map(|s| Arc::new(s.clone()));
         let (time_out_tx, mut time_out_rx) = sync::mpsc::channel::<()>(16);
         let time_out_tx = Arc::new(time_out_tx);
         let child_exit_tx = child_exit_tx2;
@@ -416,7 +424,7 @@ async fn start_process(
                     return;
                 }
                 oper = opres.recv() => {
-                    if wait_oper_select_oper(&child, &oper.unwrap(), has_stdin, &stop_command, &config.timeout, &time_out_tx, &child_exit_tx, &self_stdin_tx).await {
+                    if wait_oper_select_oper(&child, &oper.unwrap(), has_stdin, &stop_command, &config.timeout, &time_out_tx, &child_exit_tx, &exit_cmd_tx).await {
                         return;
                     }
                 }
@@ -428,7 +436,7 @@ async fn start_process(
         }
     });
 
-    join!(wait_child, wait_stdin, wait_send_stdin, wait_oper).transpose_same_error()?;
+    join!(wait_child, wait_send_stdin, wait_oper).transpose_same_error()?;
 
     Ok(())
 }
